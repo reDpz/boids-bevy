@@ -2,9 +2,10 @@
 
 use crate::util;
 use crate::util::*;
+use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use rand::{Rng, RngCore};
 
-const BOID_COUNT: usize = 1000;
+const BOID_COUNT: usize = 300;
 use bevy::{
     math::VectorSpace, prelude::*, render::render_resource::encase::internal::ReadFrom,
     sprite::MaterialMesh2dBundle,
@@ -88,7 +89,7 @@ fn setup(mut commands: Commands) {
         vision_radius: 80.,
         avoid_radius: 10.,
         speed: 4.0,
-        flock_strength: 0.1,
+        flock_strength: 0.075,
         cohesion_strength: 0.03,
         avoid_strength: 0.1,
         steer_away_strength: 0.1,
@@ -139,8 +140,12 @@ fn tick_boids(
             // ensure we arent comparing the same entity
             if *copy_entity != entity && distance <= boids_settings.vision_radius {
                 if distance <= boids_settings.avoid_radius {
-                    avg_avoid_pos += copy_position.xy();
-                    boids_in_avoid += 1;
+                    /* avg_avoid_pos += copy_position.xy();
+                    boids_in_avoid += 1; */
+
+                    let mut inv_offset = transform.translation.xy() - copy_position.xy();
+                    inv_offset *= boids_settings.avoid_radius / inv_offset.length();
+                    vel_tuple.0 += inv_offset * boids_settings.avoid_strength;
                 }
                 avg_vel += copy_velocity.0;
                 avg_pos += copy_position.xy();
@@ -165,17 +170,14 @@ fn tick_boids(
                 .normalize_or_zero();
         }
 
-        if boids_in_avoid != 0 {
+        /*         if boids_in_avoid != 0 {
             avg_avoid_pos /= boids_in_avoid as f32;
 
             // calculate this as an inverse offset
-            let inv_offset = transform.translation.xy() - avg_avoid_pos;
-
-            vel_tuple.0 = vel_tuple
-                .0
-                .lerp(inv_offset, boids_settings.avoid_strength)
-                .normalize_or_zero();
-        }
+            let mut inv_offset = transform.translation.xy() - avg_avoid_pos;
+            inv_offset *= 1.0 / inv_offset.length();
+            vel_tuple.0 += inv_offset * boids_settings.avoid_strength;
+        } */
 
         // TODO: calculate this live
         let camera_bounds = util::Rect {
@@ -211,7 +213,7 @@ fn tick_boids(
     }
 }
 
-fn rotate_boids(mut query: Query<(&mut Transform, &Velocity), With<Boid>>) {
+fn rotate_boids(mut query: Query<(&mut Transform, &Velocity), With<Boid>>, time: Res<Time>) {
     for (mut transform, vel_tuple) in query.iter_mut() {
         // for some reason the qat is rotating Ccw so you must negate it
         // Calculate the angle using SOHCAHTOA. Since we want angle from the
@@ -222,7 +224,10 @@ fn rotate_boids(mut query: Query<(&mut Transform, &Velocity), With<Boid>>) {
         if vel_tuple.0.y < 0.0 {
             angle += std::f32::consts::PI;
         }
-        transform.rotation = Quat::from_rotation_z(angle);
+        let current_rot = transform.rotation;
+        let new_rot = Quat::from_rotation_z(angle);
+        let inbetween = current_rot.lerp(new_rot, 0.05);
+        transform.rotation = inbetween;
     }
 }
 
@@ -250,12 +255,67 @@ pub struct BoidsSettings {
 
 pub struct BoidsPlugin;
 
+fn settings_ui(mut contexts: EguiContexts, mut settings: ResMut<BoidsSettings>) {
+    egui::Window::new("Settings").show(contexts.ctx_mut(), |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Vision radius");
+            ui.add(egui::Slider::new(&mut settings.vision_radius, 0.0..=200.0))
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Avoid Radius");
+            ui.add(egui::Slider::new(&mut settings.avoid_radius, 0.0..=100.0))
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Boid speed");
+            ui.add(egui::Slider::new(&mut settings.speed, 1.0..=20.0))
+        });
+
+        // strengths
+        ui.horizontal(|ui| {
+            ui.label("Flock strength");
+            ui.add(egui::Slider::new(&mut settings.flock_strength, 0.0..=1.0))
+        });
+        ui.horizontal(|ui| {
+            ui.label("Cohesion strength");
+            ui.add(egui::Slider::new(
+                &mut settings.cohesion_strength,
+                0.0..=1.0,
+            ))
+        });
+        ui.horizontal(|ui| {
+            ui.label("Avoid strength");
+            ui.add(egui::Slider::new(&mut settings.avoid_strength, 0.0..=1.0))
+        });
+        ui.horizontal(|ui| {
+            ui.label("Steer away strength");
+            ui.add(egui::Slider::new(
+                &mut settings.steer_away_strength,
+                0.0..=1.0,
+            ))
+        });
+
+        if ui.button("Reset Settings").clicked() {
+            settings.vision_radius = 80.;
+            settings.avoid_radius = 10.;
+            settings.speed = 4.0;
+            settings.flock_strength = 0.075;
+            settings.cohesion_strength = 0.03;
+            settings.avoid_strength = 0.1;
+            settings.steer_away_strength = 0.1;
+        }
+    });
+}
+
 impl Plugin for BoidsPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(Time::<Fixed>::from_hz(60.)) //update 60 times per second
             .add_systems(Startup, setup)
             .add_systems(Startup, spawn_boid)
             .add_systems(FixedUpdate, tick_boids)
-            .add_systems(Update, rotate_boids);
+            .add_systems(Update, rotate_boids)
+            .add_plugins(EguiPlugin)
+            .add_systems(Update, settings_ui);
     }
 }
